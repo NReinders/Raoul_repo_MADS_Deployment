@@ -27,7 +27,7 @@ def main():
     logger.info("starting autoencode.py")
     from mltrainer import ReportTypes, Trainer, TrainerSettings, vae
 
-    presets = VAESettings()
+    presets = VAESettings(latent=2)
 
     logger.info("loading MNIST datasets")
     training_data = datasets.MNIST(

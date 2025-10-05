@@ -8,10 +8,12 @@ from torchvision import datasets
 from torchvision.transforms import ToTensor
 from tqdm import tqdm
 
+from mltrainer import vae
 from settings import VAESettings, VAEstreamer
 
 logger.add("logs/vae.log")
 logger.add("/tmp/autoencoder.log")
+device = torch.device("cpu")
 
 
 def sample_range(encoder, stream, k: int = 10):
@@ -25,14 +27,14 @@ def sample_range(encoder, stream, k: int = 10):
     return minmax.min(), minmax.max()
 
 
-def build_latent_grid(decoder, minimum: int, maximum: int, k: int = 20):
+def build_latent_grid(decoder, minimum: int, maximum: int, k: int = 20, device: torch.device = device):
     x = np.linspace(minimum, maximum, k)
     y = np.linspace(minimum, maximum, k)
     xx, yy = np.meshgrid(x, y)
     grid = np.c_[xx.ravel(), yy.ravel()]
 
-    img = decoder(torch.tensor(grid, dtype=torch.float32))
-    return img.detach().numpy()
+    img = decoder(torch.tensor(grid, dtype=torch.float32).to(device))
+    return img.detach().cpu().numpy()
 
 
 def plot_grid(
@@ -46,7 +48,12 @@ def plot_grid(
     fig.suptitle(title, fontsize=16)
     axs = axs.ravel()
     for i in tqdm(range(k * k)):
-        axs[i].imshow(img[i], cmap="gray")
+        frame = img[i]
+        if frame.ndim == 3 and frame.shape[-1] == 1:
+            frame = frame[..., 0]
+        elif frame.ndim == 3 and frame.shape[0] == 1:
+            frame = frame[0]
+        axs[i].imshow(frame, cmap="gray")
         axs[i].axis("off")
     fig.savefig(filepath)
     logger.success(f"saved grid to {filepath}")
@@ -55,7 +62,7 @@ def plot_grid(
 def main():
     logger.info("Starting show_vae.py")
 
-    presets = VAESettings()
+    presets = VAESettings(latent=2)
 
     logger.info("loading data")
     test_data = datasets.MNIST(
@@ -69,11 +76,21 @@ def main():
     modelpath = presets.modeldir / presets.modelname
 
     logger.info(f"loading pretrained model {modelpath}")
-    model = torch.load(modelpath)
+    try:
+        # PyTorch 2.6 default changed to weights_only=True; we need False for full-object checkpoints
+        model = torch.load(modelpath, map_location=device, weights_only=False)
+        logger.info("Loaded full model object (pickle checkpoint)")
+    except Exception as e:
+        logger.warning(f"Full-object load failed ({e}); falling back to state_dict load")
+        model = vae.AutoEncoder(VAESettings().model_dump()).to(device)
+        state = torch.load(modelpath, map_location=device)
+        model.load_state_dict(state)
+    model.eval()
 
     X, Y = next(teststreamer)
-
-    img = model(X)
+    X = X.to(device)
+    with torch.no_grad():
+        img = model(X)
     if not presets.imgpath.exists():
         presets.imgpath.mkdir(parents=True)
 
